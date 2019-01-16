@@ -205,14 +205,38 @@ sub getChange($dir, $version)
     return undef
         if ! -e $Changes;
 
-    my $data = readFile($Changes);
+    my @data = readFile($Changes);
     my $V = quotemeta $version;
-    say "read changes";
-    return $1
-        if $data =~ /^ ( \s* $V .+? ) (^ \s*  \d|$$) /msx;
 
-say "no match";
-    return undef;
+    my $change ;
+    my $indent = '';
+    while (@data)
+    {
+        my $line = shift @data;
+        if ($line =~ /^(\s*)$V/)
+        {
+            $indent = $1;
+            $change = $line;
+            last
+        }
+    }
+
+    return undef
+        if ! defined $change;
+    
+    while (@data)
+    {
+        my $line = shift @data;
+        last
+            if $line =~ /^$indent\S/ ;
+
+        $change .= $line 
+    }
+
+    $change =~ s/\s+$// ;
+    $change .= "\n";
+
+    return $change ;
 }
 
 sub import_release($self,$release) {
