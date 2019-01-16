@@ -189,6 +189,32 @@ sub releases_to_import ($self) {
     }
 }
 
+sub readFile($file)
+{
+    open F, "<", $file
+        or die "ERROR: Cannot open file '$file': $!\n" ;
+    my @data = <F> ;
+    close F ;
+    return wantarray ? @data : join('', @data) ;
+}
+
+sub getChange($dir, $version)
+{
+    my $Changes = "$dir/Changes";
+
+    return undef
+        if ! -e $Changes;
+
+    my $data = readFile($Changes);
+    my $V = quotemeta $version;
+    say "read changes";
+    return $1
+        if $data =~ /^ ( \s* $V .+? ) (^ \s*  \d|$$) /msx;
+
+say "no match";
+    return undef;
+}
+
 sub import_release($self,$release) {
     my $import_version = $release->dist_version;
 
@@ -230,7 +256,7 @@ sub import_release($self,$release) {
         # create the commit object
         $ENV{GIT_AUTHOR_NAME}  = $self->author_name  || $release->author_name  || $ENV{GIT_AUTHOR_NAME};
         $ENV{GIT_AUTHOR_EMAIL} = $self->author_email || $release->author_email || $ENV{GIT_AUTHOR_EMAIL};
-        $ENV{GIT_AUTHOR_DATE}  = $release->date if $release->date;
+        $ENV{COMMIT_DATE} = $ENV{GIT_COMMITTER_DATE}  = $ENV{GIT_AUTHOR_DATE}  = $release->date if $release->date;
 
         my @parents = grep { $_ } $self->last_commit, @{ $self->parent };
 
@@ -255,7 +281,15 @@ END
 
         print $self->git_run('update-ref', '-m' => "import " . $release->dist_name, 'refs/remotes/cpan/master', $commit );
 
-        print $self->git_run( tag => 'v'.$release->dist_version, $commit );
+        my $C = getChange($release->extracted_dir, $release->dist_version);
+        my @extra;
+        if (defined $C)
+        {
+            say "CHANGE[$C]";
+            @extra = ("-m" => $C) ;
+        }
+
+        print $self->git_run( tag => 'v'.$release->dist_version, @extra, $commit );
 
         say "created tag '@{[ 'v'.$release->dist_version ]}' ($commit)";
     }
