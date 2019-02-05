@@ -106,6 +106,21 @@ sub get_releases_from_local_file($self,$path) {
     return Git::CPAN::Patch::Release->new( metacpan => $self->metacpan, tarball => $path );
 }
 
+sub get_releases_from_local_dir($self,$path) {
+    my @releases;
+
+    my @tars = <$path/*.tar.gz>;
+    for my $tar (@tars) {
+        say "Match with $tar";
+        push @releases, Git::CPAN::Patch::Release->new(
+                metacpan => $self->metacpan,
+            tarball => $tar
+        );
+    }
+
+    return @releases;
+}
+
 sub clone_git_repo($self,$release,$url) {
     $self->git_run( 'remote', 'add', 'cpan', $url );
     {
@@ -183,6 +198,9 @@ sub releases_to_import ($self) {
         when ( -f $_ ) {
             return $self->get_releases_from_local_file( $_ );
         }
+        when ( -d $_ ) {
+            return $self->get_releases_from_local_dir( $_ );
+        }        
         default {
             return $self->get_releases_from_cpan($_);
         }
@@ -198,12 +216,28 @@ sub readFile($file)
     return wantarray ? @data : join('', @data) ;
 }
 
-sub getChange($dir, $version)
+sub timestamp($filename)
+{
+    my @bits = localtime((stat $filename)[9]);
+
+    my @abbr = qw(January February March April May June July August September October November December);
+
+    my $day = $bits[3];
+    my $month = $abbr[$bits[4]];
+    my $year = $bits[5] + 1900;
+
+    "$day $month $year";
+}
+
+sub getChange($dist_name, $dir, $version)
 {
     my $Changes = "$dir/Changes";
+    $Changes = "./$dist_name.Changes" if ! -e $Changes;
+
+say "getChange $dir $version"; system "ls -ld $dir";
 
     return undef
-        if ! -e $Changes;
+        if ! -e $Changes ;
 
     my @data = readFile($Changes);
     my $V = quotemeta $version;
@@ -213,11 +247,20 @@ sub getChange($dir, $version)
     while (@data)
     {
         my $line = shift @data;
-        if ($line =~ /^(\s*)$V/)
+        if ($line =~ /^ (\s* )$V \b /x)
         {
             $indent = $1;
             $change = $line;
-            last
+
+            # Add date if not present
+            if ($change !~ /\d+(st|nd|rd|th)? (\S+) (199|20[01])\d/ )
+            {
+                say "NO Date";
+                chomp $change;
+                $change .= " " . timestamp($dir) . "\n" ;
+            }
+
+            last ;
         }
     }
 
@@ -280,7 +323,18 @@ sub import_release($self,$release) {
         # create the commit object
         $ENV{GIT_AUTHOR_NAME}  = $self->author_name  || $release->author_name  || $ENV{GIT_AUTHOR_NAME};
         $ENV{GIT_AUTHOR_EMAIL} = $self->author_email || $release->author_email || $ENV{GIT_AUTHOR_EMAIL};
-        $ENV{COMMIT_DATE} = $ENV{GIT_COMMITTER_DATE}  = $ENV{GIT_AUTHOR_DATE}  = $release->date if $release->date;
+
+        my $rd = $release->date;
+        if (! $release->date)
+        {
+            use POSIX qw(strftime);
+            $rd = strftime "%FT%H:%I:%S", localtime((stat $release->extracted_dir)[9]); ;
+        }
+
+        $ENV{COMMIT_DATE} = $ENV{GIT_COMMITTER_DATE}  = $ENV{GIT_AUTHOR_DATE}  = $rd if $rd;
+
+say "COMMIT_DATE $ENV{COMMIT_DATE} [$release->{date}]";
+    # my $date = DateTime::Format::W3CDTF->new->parse_datetime( $meta->{date} );
 
         my @parents = grep { $_ } $self->last_commit, @{ $self->parent };
 
@@ -288,8 +342,19 @@ sub import_release($self,$release) {
             ( $self->first_import ? 'initial import of' : 'import' ),
             $release->dist_name, $release->dist_version;
 
+
+        my $C = getChange($release->dist_name, $release->extracted_dir, $release->dist_version);
+        my @extra;
+        if (defined $C)
+        {
+            say "CHANGE[$C]";
+            @extra = ("-m" => $C) ;
+        }
+        
         no warnings 'uninitialized';
         $message .= <<"END";
+
+$C
 
 git-cpan-module:   @{[ $release->dist_name ]}
 git-cpan-version:  @{[ $release->dist_version ]}
@@ -305,14 +370,6 @@ END
 
         print $self->git_run('update-ref', '-m' => "import " . $release->dist_name, 'refs/remotes/cpan/master', $commit );
 
-        my $C = getChange($release->extracted_dir, $release->dist_version);
-        my @extra;
-        if (defined $C)
-        {
-            say "CHANGE[$C]";
-            @extra = ("-m" => $C) ;
-        }
-
         print $self->git_run( tag => 'v'.$release->dist_version, @extra, $commit );
 
         say "created tag '@{[ 'v'.$release->dist_version ]}' ($commit)";
@@ -323,8 +380,10 @@ END
 
 sub run ($self) {
     my @releases = $self->releases_to_import;
-
-    for my $r ( @releases ) {
+use experimental 'say';
+    # sort by version
+    for my $r ( sort { $a->dist_version  <=> $b->dist_version } @releases ) {
+        say "release->dist_version " . $r->dist_version ;
         eval { $self->import_release($r) };
         if ( $@ ) {
             warn "failed to import release, skipping...\n$@\n";

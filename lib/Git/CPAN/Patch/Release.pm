@@ -52,10 +52,11 @@ has author_cpan => (
     isa => 'Maybe[Str]',
     lazy => 1,
     default => sub {
-        my $author = eval{$_[0]->meta_info->{author}};
-        $author = ref $author ? $author->[0] : $author;
-        $author = uc($1) if $author =~ /<?(\S+)\@cpan\.org/i;
-        return $author;
+        # my $author = eval{$_[0]->meta_info->{author}};
+        # $author = ref $author ? $author->[0] : $author;
+        # $author = uc($1) if $author =~ /<?(\S+)\@cpan\.org/i;
+        # return $author;
+        return 'pmqs';
     },
 );
 
@@ -141,11 +142,13 @@ has extracted_dir => (
     lazy => 1,
     default => sub($self) {
 
-        my $archive = Archive::Any->new( $self->tarball );
+        # my $archive = Archive::Any->new( $self->tarball );
         my $tmpdir = $self->tmpdir;
-        $archive->extract( $tmpdir );
+        # $archive->extract( $tmpdir );
+        # return $tmpdir if $archive->is_impolite;
 
-        return $tmpdir if $archive->is_impolite;
+        # Hardwire to use standard tar command
+        system "cd $tmpdir; tar xf " . $self->tarball;
 
         my $dir;
         opendir $dir, $tmpdir;
